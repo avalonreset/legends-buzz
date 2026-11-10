@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "legends-buzz"
+version = "0.1.0"
+description = "Self-hosted Block Buzz relay operations, 26-domain MCP-to-CLI agent routing, Nostr NIP-OA/NIP-FI membership diagnostics, and desktop PE/asset verification for AI coding agents."
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+authors = [{name = "Benjamin Samar"}]
+keywords = [
+  "buzz",
+  "nostr",
+  "nip-29",
+  "mcp",
+  "acp",
+  "relay",
+  "self-hosted",
+  "ai-agents",
+  "cli",
+  "cto-legends",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Communications :: Chat",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: System :: Systems Administration",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/avalonreset/legends-buzz"
+Repository = "https://github.com/avalonreset/legends-buzz"
+Issues = "https://github.com/avalonreset/legends-buzz/issues"
+Documentation = "https://github.com/avalonreset/legends-buzz/blob/main/docs/AGENT-RECIPE.md"
+Changelog = "https://github.com/avalonreset/legends-buzz/blob/main/CHANGELOG.md"
+
+[project.scripts]
+legends-buzz = "legends_buzz.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["legends_buzz*"]

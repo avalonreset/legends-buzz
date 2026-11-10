@@ -1,0 +1,65 @@
+{
+  "id": "legends-buzz",
+  "name": "Legends Buzz",
+  "repo": "avalonreset/legends-buzz",
+  "version": "0.1.0",
+  "summary": "Self-hosted Block Buzz relay operations, 26-domain MCP-to-CLI agent routing, Nostr NIP-OA/NIP-FI membership diagnostics, and desktop PE/asset verification.",
+  "domains": [
+    "buzz",
+    "nostr",
+    "nip-29",
+    "mcp",
+    "acp",
+    "relay",
+    "self-hosted",
+    "chatops"
+  ],
+  "outcomes": [
+    "Route all 26 Block Buzz domains and 108 subcommands through the native buzz CLI (--format agent) without an ambient MCP daemon",
+    "Deploy and upgrade self-hosted Buzz relays (PostgreSQL 17, Redis 7, Blossom, Traefik/Caddy) with @sha256 digest pinning, isolated --internal clone migration rehearsals, and 9 production blueprints",
+    "Probe all 6 live relay surfaces (/_readiness, /health, NIP-11, tauri://localhost CORS, /invite/* CSP edge, and /pair RFC 6455 WebSocket 101) and diagnose residual HTTP 403 membership gaps (/invite/<token>), NIP-FI gates, and Bech32 npub1.../hex64 owner governance coverage",
+    "Reconstruct isolated Nostr kind:9 connected-component reply threads (thread-context) and verify content-addressed /media/<sha256> attachments across 5 zero-trust security gates (media-inspect)",
+    "Audit Buzz Desktop 0.X and 1.0 installations on Windows for NTFS Buzz.exe/buzz.exe PE subsystem collisions and embedded WebView frontend assets",
+    "Configure subscription-first ACP coding agents (Codex, Claude Code, Goose) with stripped API keys, require_mention loop guards, NIP-AE memory engrams, and SQLite outbox bridges"
+  ],
+  "examples": [
+    "Check why my Buzz agent is getting HTTP 403 on channels list even though the relay is healthy",
+    "Map the Buzz CLI commands for managing multi-repo NIP-MP projects, channel canvases, and NIP-AE agent memory",
+    "Generate a production Docker Compose stack and zero-downtime migration rehearsal plan for our self-hosted Buzz relay",
+    "Audit our Windows Buzz Desktop install to make sure Buzz 1.0 did not overwrite the console buzz.exe CLI",
+    "Run a disposable message canary and owner-access governance audit across our Buzz community channels"
+  ],
+  "exclusions": [
+    "Do not pass Nostr private keys (nsec1... or hex64) on command-line argument vectors",
+    "Do not deploy floating ghcr.io/block/buzz:latest container tags without verifying SQLx migration ceilings against a cloned staging database"
+  ],
+  "install": {
+    "strategy": "python_venv_wheel_or_editable",
+    "requires_python": ">=3.11",
+    "entrypoints": [
+      "legends-buzz"
+    ]
+  },
+  "recipe": "docs/AGENT-RECIPE.md",
+  "knowledge_pack": "knowledge/buzz/pack.json",
+  "readiness_probes": [
+    {
+      "name": "doctor",
+      "command": [
+        "legends-buzz",
+        "doctor",
+        "--json"
+      ],
+      "paid_calls": false
+    },
+    {
+      "name": "resources",
+      "command": [
+        "legends-buzz",
+        "resources",
+        "--json"
+      ],
+      "paid_calls": false
+    }
+  ]
+}

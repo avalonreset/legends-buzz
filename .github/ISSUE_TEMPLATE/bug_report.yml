@@ -1,0 +1,29 @@
+name: Bug report
+description: Report a reproducible bug in legends-buzz
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include `nsec1...`, 64-character hex secret keys, federated identity bearer tokens, or private community invite tokens.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Clear description of the bug and the command or function called.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal command or code snippet that reproduces the behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Sanitized `legends-buzz doctor --json` and OS / Python version
+    validations:
+      required: true

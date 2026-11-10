@@ -1,0 +1,31 @@
+{
+  "product": "legends-buzz",
+  "banner_template": "legends-type-v1",
+  "social_template": "legends-social-v1",
+  "subtitle": "self-hosted block buzz relay operations, 26-domain mcp-to-cli routing, and nostr agent governance",
+  "font": "Legends Regular",
+  "font_sha256": "3769f0f76477a7d9e2e6cb40422dedacb56c9ab1a6f7beee89b2b9ba6b8091ee",
+  "font_redistributed": false,
+  "files": [
+    {
+      "name": "banner.png",
+      "bytes": 77018,
+      "sha256": "f6291378d0968f1b93ae4c2aac8fb564293d5fef2debda62f440454c3d84f354"
+    },
+    {
+      "name": "banner.webp",
+      "bytes": 30206,
+      "sha256": "053d4e7517b13ade497556efd9ffc47a29a046e6d994318b35cb5dd04ab42cfd"
+    },
+    {
+      "name": "preview.png",
+      "bytes": 27871,
+      "sha256": "e7c1c76bf904a12e5fba2c9054debcd96cbb6daac59e8f8792c9410bdb75c5f0"
+    },
+    {
+      "name": "social-preview.png",
+      "bytes": 25581,
+      "sha256": "5a3666e3097121b225ed1ee81041e26f394c2c144577589fa793a9a974f8dfee"
+    }
+  ]
+}
