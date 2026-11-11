@@ -6,11 +6,27 @@ import os
 from pathlib import Path
 import re
 import struct
+import sys
 from typing import Any
 
 IMAGE_SUBSYSTEM_WINDOWS_GUI = 2
 IMAGE_SUBSYSTEM_WINDOWS_CUI = 3
 _ASSET_PATTERN = re.compile(rb"assets/[A-Za-z0-9._-]{4,120}\.(?:js|css|woff2?|svg|png|webp|wasm)")
+_MACOS_SYSTEM_SYMLINKS = frozenset({Path("/var"), Path("/tmp"), Path("/etc")})
+
+
+def _check_no_symlink_chain(path: Path) -> None:
+    """Reject symlinked target paths or symlinked non-system parent directories before .resolve()."""
+    from .api import BuzzSecurityError
+
+    target = Path(path).expanduser()
+    if target.is_symlink():
+        raise BuzzSecurityError(f"Refusing symlinked path: {target}")
+    for parent in target.absolute().parents:
+        if sys.platform == "darwin" and parent in _MACOS_SYSTEM_SYMLINKS:
+            continue
+        if parent.is_symlink():
+            raise BuzzSecurityError(f"Refusing path under symlinked parent directory: {parent}")
 
 
 def inspect_pe_file(path: Path) -> dict[str, Any]:
@@ -143,7 +159,9 @@ def audit_desktop_install(
     cli_bin: Path | None = None,
 ) -> dict[str, Any]:
     """Audit a Buzz Desktop installation for NTFS Buzz.exe/buzz.exe collisions, PE subsystems, and embedded assets."""
-    root = (Path(install_dir) if install_dir else default_buzz_install_dir()).resolve()
+    raw_root = Path(install_dir).expanduser() if install_dir else default_buzz_install_dir()
+    _check_no_symlink_chain(raw_root)
+    root = raw_root.resolve()
     findings: list[dict[str, str]] = []
     binaries: dict[str, Any] = {}
 
@@ -156,7 +174,9 @@ def audit_desktop_install(
         ("buzz_acp_root", root / "buzz-acp.exe"),
     ]
     if cli_bin is not None:
-        candidates.append(("explicit_cli_bin", Path(cli_bin).resolve()))
+        raw_cli = Path(cli_bin).expanduser()
+        _check_no_symlink_chain(raw_cli)
+        candidates.append(("explicit_cli_bin", raw_cli.resolve()))
 
     for label, candidate in candidates:
         if candidate.exists() and not candidate.is_symlink() and candidate.is_file():

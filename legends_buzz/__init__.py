@@ -1,7 +1,7 @@
 """legends-buzz: Self-hosted Block Buzz relay operations, 26-domain MCP-to-CLI routing, and desktop/relay verification."""
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from .api import (
     BuzzOperationError,
@@ -22,6 +22,8 @@ from .api import (
     run_buzz_cli,
     scrub_secrets,
     thread_context,
+    validate_channel_uuid,
+    validate_event_hex64,
     validate_media_url,
     validate_relay_url,
     verify_media_magic_bytes,
@@ -64,6 +66,8 @@ __all__ = [
     "scan_embedded_frontend_assets",
     "scrub_secrets",
     "thread_context",
+    "validate_channel_uuid",
+    "validate_event_hex64",
     "validate_media_url",
     "validate_relay_url",
     "verify_media_magic_bytes",

@@ -57,6 +57,7 @@ FORBIDDEN = [
     r"(?i)CryptUnprotectData",
     r"(?i)GetAsyncKeyState",
     r"(?i)IndexedDB",
+    r"(?i)windowsHide\s*:\s*true",
 ]
 FORBIDDEN_FILES = {".pem", ".key", ".p12", ".pfx", ".ps1", ".bat", ".cmd", ".vbs", ".ahk"}
 PNG_METADATA_CHUNKS = {"tEXt", "iTXt", "zTXt", "eXIf"}
@@ -153,6 +154,8 @@ def check(root: Path = ROOT) -> list[str]:
         if path.suffix not in TEXT_SUFFIXES and path.name != "LICENSE":
             continue
         text = path.read_text(encoding="utf-8-sig")
+        if "\ufffd" in text or any(ord(ch) < 32 and ch not in "\r\n\t" for ch in text):
+            errors.append(f"Disallowed control character or U+FFFD in text file: {rel}")
         if path.name != "check_release.py":
             for pattern in FORBIDDEN:
                 if re.search(pattern, text):

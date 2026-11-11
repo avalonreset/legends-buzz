@@ -2,7 +2,7 @@
   "id": "legends-buzz",
   "name": "Legends Buzz",
   "repo": "avalonreset/legends-buzz",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "summary": "Self-hosted Block Buzz relay operations, 26-domain MCP-to-CLI agent routing, Nostr NIP-OA/NIP-FI membership diagnostics, and desktop PE/asset verification.",
   "domains": [
     "buzz",

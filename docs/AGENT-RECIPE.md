@@ -42,3 +42,5 @@ The vault also ships as an attachable Empire knowledge pack (`knowledge/buzz/pac
 - Never pass `--private-key` on the command line; `legends-buzz` passes `BUZZ_PRIVATE_KEY` strictly via child process environment variables (`shell=False`).
 - On Windows, `legends-buzz` inspects PE subsystem headers (`IMAGE_SUBSYSTEM_WINDOWS_CUI = 3`) before executing `buzz.exe` so a GUI `Buzz.exe` collision never opens a window during automation.
 - Never spawn hidden consoles, execution-policy bypass shell wrappers, or bulk file-overwrite loops.
+- Never read local browser profile databases, cookie stores, `Login Data`, DPAPI stores, or third-party credential stores; read Buzz credentials exclusively from `BUZZ_PRIVATE_KEY` or an explicit `--env-file` path.
+- Refuse symlink chains on un-resolved paths before `.resolve()`, refuse writes inside Windows Controlled Folder Access roots by default, and fail closed (`O_CREAT | O_EXCL`) unless `--overwrite` is passed.

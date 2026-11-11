@@ -18,6 +18,11 @@ if str(REPO_ROOT) not in sys.path:
 from legends_buzz.api import (
     BuzzSecurityError,
     BuzzValidationError,
+    _bech32_hrp_expand,
+    _bech32_polymod,
+    _BECH32_ALPHABET,
+    _safe_parse_xml_bytes,
+    channel_snapshot,
     classify_key,
     inspect_media_attachment,
     membership_check,
@@ -25,8 +30,11 @@ from legends_buzz.api import (
     normalize_pubkey,
     owner_access_audit,
     parse_env_file,
+    resolve_buzz_binary,
     scrub_secrets,
     thread_context,
+    validate_channel_uuid,
+    validate_event_hex64,
     validate_media_url,
     validate_relay_url,
     verify_media_magic_bytes,
@@ -50,13 +58,35 @@ def _build_synthetic_pe(subsystem: int, extra_payload: bytes = b"") -> bytes:
     return bytes(mz) + bytes(pe_hdr) + extra_payload
 
 
+def _encode_test_bech32(hrp: str, payload_32: bytes) -> str:
+    acc = 0
+    bits = 0
+    words: list[int] = []
+    for byte in payload_32:
+        acc = (acc << 8) | byte
+        bits += 8
+        while bits >= 5:
+            bits -= 5
+            words.append((acc >> bits) & 31)
+    if bits:
+        words.append((acc << (5 - bits)) & 31)
+    values = _bech32_hrp_expand(hrp) + words
+    polymod = _bech32_polymod(values + [0, 0, 0, 0, 0, 0]) ^ 1
+    checksum = [(polymod >> (5 * (5 - i))) & 31 for i in range(6)]
+    return hrp + "1" + "".join(_BECH32_ALPHABET[w] for w in words + checksum)
+
+
 class KeyAndSecretScrubbingTests(unittest.TestCase):
     def test_classify_key_supports_nsec_and_hex64(self) -> None:
-        fake_nsec = "nsec1" + ("q" * 58)
+        fake_nsec = _encode_test_bech32("nsec", b"\x11" * 32)
         res_nsec = classify_key(fake_nsec)
         self.assertTrue(res_nsec["valid"])
         self.assertEqual(res_nsec["kind"], "nsec")
         self.assertTrue(str(res_nsec["fingerprint"]).startswith("sha256:"))
+
+        # Corrupted checksum or mixed-case nsec must be rejected
+        self.assertFalse(classify_key("nsec1" + ("q" * 58))["valid"])
+        self.assertFalse(classify_key(fake_nsec[:10].upper() + fake_nsec[10:])["valid"])
 
         fake_hex = "a1" * 32
         res_hex = classify_key(fake_hex)
@@ -382,18 +412,19 @@ class MembershipAuditAndCanaryTests(unittest.TestCase):
                 self.assertEqual(res_ok["channel_count"], 1)
 
     def test_owner_access_audit_flags_missing_owner(self) -> None:
+        ch_uuid = "5ff0675d-acdd-5468-9b80-7a9bee474e56"
         fake_membership = {
             "relay_url": "https://buzz.example.com",
             "status": "member",
-            "channels": [{"id": "ch-1", "name": "ops"}],
+            "channels": [{"id": ch_uuid, "name": "ops"}],
             "remediation": None,
         }
         fake_members_cli = {
             "ok": True,
             "exit_code": 0,
-            "stdout": '[{"pubkey":"agent_pubkey_only","role":"owner"}]',
+            "stdout": '[{"pubkey":"' + ("a" * 64) + '","role":"owner"}]',
             "stderr": "",
-            "json": [{"pubkey": "agent_pubkey_only", "role": "owner"}],
+            "json": [{"pubkey": "a" * 64, "role": "owner"}],
         }
         with tempfile.TemporaryDirectory() as tmp:
             env_file = Path(tmp) / "buzz.env"
@@ -405,7 +436,7 @@ class MembershipAuditAndCanaryTests(unittest.TestCase):
                 mock.patch("legends_buzz.api.membership_check", return_value=fake_membership),
                 mock.patch("legends_buzz.api.run_buzz_cli", return_value=fake_members_cli),
             ):
-                audit = owner_access_audit(env_file=env_file, expected_pubkey="human_owner_pubkey")
+                audit = owner_access_audit(env_file=env_file, expected_pubkey="f" * 64)
                 self.assertFalse(audit["ok"])
                 self.assertEqual(audit["gap_count"], 1)
 
@@ -416,11 +447,16 @@ class MembershipAuditAndCanaryTests(unittest.TestCase):
         self.assertEqual(normalize_pubkey(expected_hex.upper()), expected_hex)
         with self.assertRaises(BuzzValidationError):
             normalize_pubkey("npub1lpadtgy9alcc9xwggzwuzwl93pzy4f7m04lwg8hjmcparrmyqr9ss7hksf")
+        with self.assertRaises(BuzzValidationError):
+            normalize_pubkey(npub[:10].upper() + npub[10:])
+        with self.assertRaises(BuzzValidationError):
+            normalize_pubkey("not-a-hex64-pubkey")
 
+        ch_uuid = "5ff0675d-acdd-5468-9b80-7a9bee474e56"
         fake_membership = {
             "relay_url": "https://buzz.example.com",
             "status": "member",
-            "channels": [{"id": "ch-1", "name": "general"}],
+            "channels": [{"id": ch_uuid, "name": "general"}],
             "remediation": None,
         }
         fake_members_cli = {
@@ -447,6 +483,8 @@ class MembershipAuditAndCanaryTests(unittest.TestCase):
 
     def test_message_canary_preview_and_apply_lifecycle(self) -> None:
         fake_public = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+        ch_uuid = "5ff0675d-acdd-5468-9b80-7a9bee474e56"
+        ev_hex = "e" * 64
         with tempfile.TemporaryDirectory() as tmp:
             env_file = Path(tmp) / "buzz.env"
             env_file.write_text(
@@ -454,36 +492,83 @@ class MembershipAuditAndCanaryTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with mock.patch("socket.getaddrinfo", return_value=fake_public):
-                preview = message_canary(channel_id="ch-uuid-1", env_file=env_file, apply=False)
+                preview = message_canary(channel_id=ch_uuid, env_file=env_file, apply=False)
                 self.assertEqual(preview["mode"], "preview")
                 self.assertFalse(preview["executed"])
                 plan_hash = preview["plan_sha256"]
 
                 with self.assertRaises(BuzzSecurityError):
                     message_canary(
-                        channel_id="ch-uuid-1",
+                        channel_id=ch_uuid,
                         env_file=env_file,
                         apply=True,
                         confirm_plan="wrong_hash",
                     )
 
                 side_effects = [
-                    {"ok": True, "exit_code": 0, "stdout": '{"id":"evt-123"}', "stderr": "", "json": {"id": "evt-123"}},
-                    {"ok": True, "exit_code": 0, "stdout": '[{"id":"evt-123"}]', "stderr": "", "json": [{"id": "evt-123"}]},
+                    {"ok": True, "exit_code": 0, "stdout": f'{{"id":"{ev_hex}"}}', "stderr": "", "json": {"id": ev_hex}},
+                    {"ok": True, "exit_code": 0, "stdout": f'[{{"id":"{ev_hex}"}}]', "stderr": "", "json": [{"id": ev_hex}]},
                     {"ok": True, "exit_code": 0, "stdout": "{}", "stderr": "", "json": {}},
                     {"ok": True, "exit_code": 0, "stdout": "{}", "stderr": "", "json": {}},
                     {"ok": True, "exit_code": 0, "stdout": "{}", "stderr": "", "json": {}},
                 ]
                 with mock.patch("legends_buzz.api.run_buzz_cli", side_effect=side_effects) as mocked_cli:
                     applied = message_canary(
-                        channel_id="ch-uuid-1",
+                        channel_id=ch_uuid,
                         env_file=env_file,
                         apply=True,
                         confirm_plan=plan_hash,
                     )
                     self.assertTrue(applied["ok"])
-                    self.assertEqual(applied["canary_event_id"], "evt-123")
+                    self.assertEqual(applied["canary_event_id"], ev_hex)
                     self.assertEqual(mocked_cli.call_count, 5)
+
+    def test_security_hardening_xml_imeta_and_option_injection(self) -> None:
+        # 1. XML entity expansion guard beyond 4 KB and UTF-16
+        padded_xxe = (b" " * 5000) + b'<!DOCTYPE foo [<!ENTITY xxe "boom">]><root>&xxe;</root>'
+        with self.assertRaises(BuzzSecurityError):
+            _safe_parse_xml_bytes(padded_xxe)
+
+        utf16_xxe = '<!DOCTYPE foo [<!ENTITY xxe "boom">]><root/>'.encode("utf-16")
+        with self.assertRaises(BuzzSecurityError):
+            _safe_parse_xml_bytes(utf16_xxe)
+
+        # 2. Option injection rejection on channel_id / event_id
+        with self.assertRaises(BuzzValidationError):
+            validate_channel_uuid("--relay=https://evil.example.com")
+        with self.assertRaises(BuzzValidationError):
+            validate_event_hex64("--help")
+        with self.assertRaises(BuzzValidationError):
+            channel_snapshot(channel_id="--relay=evil")
+
+        # 3. Fail-closed Gate 3 on inspect_media_attachment when event is missing or CLI fails
+        fake_public = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+        sha = "a" * 64
+        ev_id = "9" * 64
+        ch_uuid = "5ff0675d-acdd-5468-9b80-7a9bee474e56"
+        media_url = f"https://buzz.example.com/media/{sha}.csv"
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / "buzz.env"
+            env_file.write_text(
+                f"BUZZ_RELAY_URL=https://buzz.example.com\nBUZZ_PRIVATE_KEY={'b2' * 32}\n",
+                encoding="utf-8",
+            )
+            with (
+                mock.patch("socket.getaddrinfo", return_value=fake_public),
+                mock.patch(
+                    "legends_buzz.api.run_buzz_cli",
+                    return_value={"ok": True, "exit_code": 0, "stdout": "[]", "stderr": "", "json": []},
+                ),
+            ):
+                with self.assertRaises(BuzzSecurityError):
+                    inspect_media_attachment(
+                        channel_id=ch_uuid,
+                        event_id=ev_id,
+                        media_url=media_url,
+                        expected_sha256=sha,
+                        mime_type="text/csv",
+                        env_file=env_file,
+                    )
 
 
 class CliSmokeTests(unittest.TestCase):

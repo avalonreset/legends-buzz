@@ -5,6 +5,7 @@ import base64
 import csv
 import datetime as dt
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
@@ -15,6 +16,7 @@ import socket
 import ssl
 import statistics
 import subprocess
+import sys
 import tempfile
 import time
 from typing import Any
@@ -92,16 +94,20 @@ def _bech32_hrp_expand(hrp: str) -> list[int]:
     return [ord(x) >> 5 for x in hrp] + [0] + [ord(x) & 31 for x in hrp]
 
 
-def normalize_pubkey(value: str) -> str:
-    """Normalize a Nostr public key (Bech32 npub1... or 64-char hex) to lowercase hex."""
-    cleaned = str(value or "").strip().lower()
-    if not cleaned.startswith("npub1"):
-        return cleaned
-    data = [_BECH32_ALPHABET.find(ch) for ch in cleaned[5:]]
+def _bech32_decode_32bytes(raw_value: str, expected_hrp: str) -> str:
+    """Validate BIP-173 Bech32 case, length, checksum, and 5-to-8 padding bits for a 32-byte payload."""
+    raw = str(raw_value or "").strip()
+    if not raw or (raw != raw.lower() and raw != raw.upper()):
+        raise BuzzValidationError(f"Invalid mixed-case or empty Bech32 {expected_hrp} string.")
+    cleaned = raw.lower()
+    prefix = f"{expected_hrp}1"
+    if not cleaned.startswith(prefix) or len(cleaned) != len(prefix) + 58:
+        raise BuzzValidationError(f"Invalid Bech32 {expected_hrp} length ({len(cleaned)} chars; expected {len(prefix) + 58}).")
+    data = [_BECH32_ALPHABET.find(ch) for ch in cleaned[len(prefix) :]]
     if any(d == -1 for d in data) or len(data) < 6:
-        raise BuzzValidationError(f"Invalid Bech32 characters in npub: {value}")
-    if _bech32_polymod(_bech32_hrp_expand("npub") + data) != 1:
-        raise BuzzValidationError(f"Invalid BIP-173 Bech32 checksum in npub: {value}")
+        raise BuzzValidationError(f"Invalid Bech32 characters in {expected_hrp}.")
+    if _bech32_polymod(_bech32_hrp_expand(expected_hrp) + data) != 1:
+        raise BuzzValidationError(f"Invalid BIP-173 Bech32 checksum in {expected_hrp}.")
     acc = 0
     bits = 0
     out: list[int] = []
@@ -111,10 +117,39 @@ def normalize_pubkey(value: str) -> str:
         while bits >= 8:
             bits -= 8
             out.append((acc >> bits) & 0xFF)
-    hex_str = bytes(out).hex()
-    if len(hex_str) != 64:
-        raise BuzzValidationError(f"Decoded npub is not 32 bytes: {value}")
-    return hex_str
+    if bits >= 5 or ((acc << (8 - bits)) & 0xFF) != 0:
+        raise BuzzValidationError(f"Invalid non-zero BIP-173 padding bits in {expected_hrp}.")
+    if len(out) != 32:
+        raise BuzzValidationError(f"Decoded {expected_hrp} is not 32 bytes.")
+    return bytes(out).hex()
+
+
+def validate_channel_uuid(channel_id: str) -> str:
+    """Validate and canonicalize a channel UUID to prevent subprocess option injection (CWE-88)."""
+    cleaned = str(channel_id or "").strip()
+    try:
+        return str(uuid.UUID(cleaned))
+    except (ValueError, AttributeError) as exc:
+        raise BuzzValidationError("channel_id must be a canonical UUID.") from exc
+
+
+def validate_event_hex64(event_id: str) -> str:
+    """Validate and canonicalize a 64-character hexadecimal Nostr event ID."""
+    cleaned = str(event_id or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", cleaned):
+        raise BuzzValidationError("event_id must be 64 hexadecimal characters.")
+    return cleaned
+
+
+def normalize_pubkey(value: str) -> str:
+    """Normalize a Nostr public key (Bech32 npub1... or 64-char hex) to lowercase hex."""
+    raw = str(value or "").strip()
+    if raw.lower().startswith("npub1"):
+        return _bech32_decode_32bytes(raw, "npub")
+    cleaned = raw.lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", cleaned):
+        raise BuzzValidationError(f"Invalid Nostr public key (expected npub1... or 64-char hex): {value}")
+    return cleaned
 
 
 def classify_key(value: str | None) -> dict[str, Any]:
@@ -123,12 +158,12 @@ def classify_key(value: str | None) -> dict[str, Any]:
         return {"kind": "missing", "valid": False, "fingerprint": None}
     cleaned = str(value).strip()
     digest = hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:8]
-    lower = cleaned.lower()
-    if lower.startswith("nsec1") and len(lower) >= 58:
-        payload = lower[5:]
-        if all(ch in _BECH32_CHARSET for ch in payload):
-            return {"kind": "nsec", "valid": True, "fingerprint": f"sha256:{digest}"}
-        return {"kind": "invalid", "valid": False, "fingerprint": None}
+    if cleaned.lower().startswith("nsec1"):
+        try:
+            _ = _bech32_decode_32bytes(cleaned, "nsec")
+        except BuzzValidationError:
+            return {"kind": "invalid", "valid": False, "fingerprint": None}
+        return {"kind": "nsec", "valid": True, "fingerprint": f"sha256:{digest}"}
     if len(cleaned) == 64 and all(ch in "0123456789abcdefABCDEF" for ch in cleaned):
         return {"kind": "hex64", "valid": True, "fingerprint": f"sha256:{digest}"}
     return {"kind": "invalid", "valid": False, "fingerprint": None}
@@ -139,11 +174,11 @@ _MACOS_SYSTEM_SYMLINKS = frozenset({Path("/var"), Path("/tmp"), Path("/etc")})
 
 def check_no_symlink_chain(path: Path) -> None:
     """Verify neither the target path nor any non-system parent directory is a symlink."""
-    target = Path(path)
+    target = Path(path).expanduser()
     if target.is_symlink():
         raise BuzzSecurityError(f"Refusing symlinked path: {target}")
     for parent in target.absolute().parents:
-        if parent in _MACOS_SYSTEM_SYMLINKS:
+        if sys.platform == "darwin" and parent in _MACOS_SYSTEM_SYMLINKS:
             continue
         if parent.is_symlink():
             raise BuzzSecurityError(f"Refusing path under symlinked parent directory: {parent}")
@@ -298,20 +333,103 @@ def validate_relay_url(
     }
 
 
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """HTTPConnection that connects TCP to a pre-validated IP while preserving Host."""
+
+    def __init__(self, host: str, *args: Any, connect_ip: str = "", **kwargs: Any) -> None:
+        super().__init__(host, *args, **kwargs)
+        self._connect_ip = connect_ip
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection(
+            (self._connect_ip or self.host, self.port),
+            self.timeout,
+            self.source_address,
+        )
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPSConnection that connects TCP to a pre-validated IP while verifying TLS SNI for hostname."""
+
+    def __init__(
+        self,
+        host: str,
+        *args: Any,
+        connect_ip: str = "",
+        sni_hostname: str = "",
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(host, *args, **kwargs)
+        self._connect_ip = connect_ip
+        self._sni_hostname = sni_hostname or host
+
+    def connect(self) -> None:
+        raw_sock = socket.create_connection(
+            (self._connect_ip or self.host, self.port),
+            self.timeout,
+            self.source_address,
+        )
+        self.sock = self._context.wrap_socket(raw_sock, server_hostname=self._sni_hostname)
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, connect_ip: str) -> None:
+        super().__init__()
+        self._connect_ip = connect_ip
+
+    def http_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        return self.do_open(
+            lambda host, **kw: _PinnedHTTPConnection(host, connect_ip=self._connect_ip, **kw),
+            req,
+        )
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, context: ssl.SSLContext, connect_ip: str, sni_hostname: str) -> None:
+        super().__init__(context=context)
+        self._ssl_ctx = context
+        self._connect_ip = connect_ip
+        self._sni_hostname = sni_hostname
+
+    def https_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        return self.do_open(
+            lambda host, **kw: _PinnedHTTPSConnection(
+                host,
+                connect_ip=self._connect_ip,
+                sni_hostname=self._sni_hostname,
+                context=self._ssl_ctx,
+                **kw,
+            ),
+            req,
+        )
+
+
 def _http_get(
     url: str,
     headers: dict[str, str] | None = None,
     timeout: float = 10.0,
+    connect_ip: str | None = None,
+    sni_hostname: str | None = None,
 ) -> dict[str, Any]:
-    req_headers = {"User-Agent": "legends-buzz/0.1.0"}
+    req_headers = {"User-Agent": "legends-buzz/0.1.1"}
     if headers:
         req_headers.update(headers)
     req = urllib.request.Request(url, headers=req_headers, method="GET")
     context = ssl.create_default_context()
-    opener = urllib.request.build_opener(
-        urllib.request.HTTPSHandler(context=context),
-        _NoRedirectHandler(),
-    )
+    if connect_ip:
+        parsed_host = sni_hostname or urllib.parse.urlsplit(url).hostname or ""
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _PinnedHTTPHandler(connect_ip=connect_ip),
+            _PinnedHTTPSHandler(context=context, connect_ip=connect_ip, sni_hostname=parsed_host),
+            _NoRedirectHandler(),
+        )
+    else:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPSHandler(context=context),
+            _NoRedirectHandler(),
+        )
     start = time.monotonic()
     try:
         with opener.open(req, timeout=timeout) as resp:
@@ -350,29 +468,37 @@ def _probe_pairing_websocket(
     port: int,
     connect_ip: str | None = None,
     timeout: float = 8.0,
+    *,
+    use_tls: bool = True,
+    pair_path: str = "/pair",
 ) -> dict[str, Any]:
-    """Perform a pinned-IP RFC 6455 TLS WebSocket 101 upgrade handshake against /pair (buzz-pair-relay)."""
+    """Perform a pinned-IP RFC 6455 WebSocket 101 upgrade handshake against /pair (buzz-pair-relay)."""
     start = time.monotonic()
     ws_key = base64.b64encode(os.urandom(16)).decode("ascii")
     expected_accept = base64.b64encode(
         hashlib.sha1((ws_key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()
     ).decode("ascii")
-    ctx = ssl.create_default_context()
     target_host = connect_ip or hostname
+    norm_path = pair_path if pair_path.startswith("/") else f"/{pair_path}"
+    req = (
+        f"GET {norm_path} HTTP/1.1\r\n"
+        f"Host: {hostname}\r\n"
+        f"User-Agent: legends-buzz/0.1.1\r\n"
+        f"Upgrade: websocket\r\n"
+        f"Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {ws_key}\r\n"
+        f"Sec-WebSocket-Version: 13\r\n\r\n"
+    )
     try:
         with socket.create_connection((target_host, port), timeout=timeout) as raw_sock:
-            with ctx.wrap_socket(raw_sock, server_hostname=hostname) as tls_sock:
-                req = (
-                    f"GET /pair HTTP/1.1\r\n"
-                    f"Host: {hostname}\r\n"
-                    f"User-Agent: legends-buzz/0.1.0\r\n"
-                    f"Upgrade: websocket\r\n"
-                    f"Connection: Upgrade\r\n"
-                    f"Sec-WebSocket-Key: {ws_key}\r\n"
-                    f"Sec-WebSocket-Version: 13\r\n\r\n"
-                )
-                tls_sock.sendall(req.encode("ascii"))
-                resp_raw = tls_sock.recv(2048).decode("latin1", errors="replace")
+            if use_tls:
+                ctx = ssl.create_default_context()
+                with ctx.wrap_socket(raw_sock, server_hostname=hostname) as tls_sock:
+                    tls_sock.sendall(req.encode("ascii"))
+                    resp_raw = tls_sock.recv(2048).decode("latin1", errors="replace")
+            else:
+                raw_sock.sendall(req.encode("ascii"))
+                resp_raw = raw_sock.recv(2048).decode("latin1", errors="replace")
     except OSError as exc:
         return {
             "ok": False,
@@ -414,28 +540,43 @@ def probe_relay(
     """Probe a Buzz relay's /_readiness, /health, NIP-11, Tauri CORS, /invite/* edge, and /pair WebSocket."""
     target = validate_relay_url(relay_url, allow_private_network=allow_private_network)
     base_http = target["http_url"].rstrip("/")
+    connect_ip = target["resolved_ips"][0] if target["resolved_ips"] else None
+    sni_host = target["hostname"]
 
     readiness = _http_get(
         f"{base_http}/_readiness",
         headers={"Origin": "tauri://localhost"},
         timeout=timeout,
+        connect_ip=connect_ip,
+        sni_hostname=sni_host,
     )
-    health = _http_get(f"{base_http}/health", timeout=timeout)
+    health = _http_get(
+        f"{base_http}/health",
+        timeout=timeout,
+        connect_ip=connect_ip,
+        sni_hostname=sni_host,
+    )
     nip11_resp = _http_get(
         f"{base_http}/",
         headers={"Accept": "application/nostr+json"},
         timeout=timeout,
+        connect_ip=connect_ip,
+        sni_hostname=sni_host,
     )
     invite_resp = _http_get(
         f"{base_http}/invite/legends-probe-check",
         timeout=timeout,
+        connect_ip=connect_ip,
+        sni_hostname=sni_host,
     )
-    connect_ip = target["resolved_ips"][0] if target["resolved_ips"] else None
+    ws_path_prefix = urllib.parse.urlsplit(target["ws_url"]).path.rstrip("/")
     pair_ws = _probe_pairing_websocket(
         hostname=target["hostname"],
         port=target["port"],
         connect_ip=connect_ip,
         timeout=min(timeout, 8.0),
+        use_tls=target["ws_url"].startswith("wss://"),
+        pair_path=f"{ws_path_prefix}/pair",
     )
 
     nip11_doc: dict[str, Any] = {}
@@ -529,7 +670,13 @@ def resolve_buzz_binary(explicit_path: str | Path | None = None) -> dict[str, An
 
     rejected_gui_collisions: list[str] = []
     for source, candidate in candidates:
-        if not candidate.exists() or candidate.is_symlink() or not candidate.is_file():
+        try:
+            check_no_symlink_chain(candidate)
+        except BuzzSecurityError:
+            if source == "explicit":
+                raise
+            continue
+        if not candidate.exists() or not candidate.is_file():
             continue
         resolved = candidate.resolve()
         if os.name == "nt":
@@ -841,11 +988,12 @@ def owner_access_audit(
     seen_shared_names: dict[str, list[str]] = {}
 
     for ch in membership["channels"]:
-        ch_id = str(ch.get("id") or "").strip()
-        ch_name = str(ch.get("name") or ch_id)
-        if not ch_id:
+        raw_ch_id = str(ch.get("id") or "").strip()
+        ch_name = str(ch.get("name") or raw_ch_id)
+        if not raw_ch_id:
             continue
-        if ch_id in allow_set or ch_name in allow_set:
+        ch_id = validate_channel_uuid(raw_ch_id)
+        if ch_id in allow_set or raw_ch_id in allow_set or ch_name in allow_set:
             audited.append({"id": ch_id, "name": ch_name, "status": "allowlisted_skip"})
             continue
         if ch_name == "DM" or str(ch.get("channel_type") or "").lower() == "dm":
@@ -963,14 +1111,8 @@ def thread_context(
     allow_private_network: bool = False,
 ) -> dict[str, Any]:
     """Reconstruct the connected Nostr kind:9 reply thread for an event without leaking unrelated shared-channel chatter."""
-    try:
-        canonical_channel = str(uuid.UUID(str(channel_id).strip()))
-    except (ValueError, AttributeError) as exc:
-        raise BuzzValidationError("channel_id must be a canonical UUID.") from exc
-
-    canonical_event = str(event_id or "").strip().lower()
-    if not re.fullmatch(r"[0-9a-f]{64}", canonical_event):
-        raise BuzzValidationError("event_id must be 64 hexadecimal characters.")
+    canonical_channel = validate_channel_uuid(channel_id)
+    canonical_event = validate_event_hex64(event_id)
     if limit < 1 or limit > 50:
         raise BuzzValidationError("limit must be between 1 and 50.")
 
@@ -1194,26 +1336,70 @@ def verify_media_magic_bytes(data: bytes, mime_type: str, filename: str = "") ->
     return False
 
 
+MAX_XML_BYTES = 10 * 1024 * 1024
+MAX_ZIP_UNCOMPRESSED_BYTES = 60 * 1024 * 1024
+
+
 def _safe_parse_xml_bytes(data: bytes) -> ET.Element:
-    upper = data[:4096].upper()
+    if len(data) > MAX_XML_BYTES:
+        raise BuzzSecurityError(f"Refusing XML payload exceeding {MAX_XML_BYTES} bytes.")
+    upper = data.upper()
     if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
         raise BuzzSecurityError("Refusing XML payload containing DOCTYPE or ENTITY declarations (XXE guard).")
-    return ET.fromstring(data)
+    for enc in ("utf-16", "utf-16-le", "utf-16-be"):
+        try:
+            decoded_upper = data.decode(enc, errors="ignore").upper()
+            if "<!DOCTYPE" in decoded_upper or "<!ENTITY" in decoded_upper:
+                raise BuzzSecurityError("Refusing XML payload containing DOCTYPE or ENTITY declarations (XXE guard).")
+        except UnicodeError:
+            pass
+    parser = ET.XMLParser()
+    expat_parser = getattr(parser, "parser", None)
+    if expat_parser is not None:
+        def _forbid_dtd(*_args: Any) -> None:
+            raise BuzzSecurityError("Refusing XML payload containing DOCTYPE or ENTITY declarations (XXE guard).")
+        expat_parser.EntityDeclHandler = _forbid_dtd
+        expat_parser.StartDoctypeDeclHandler = _forbid_dtd
+        expat_parser.ExternalEntityRefHandler = _forbid_dtd
+    parser.feed(data)
+    return parser.close()
 
 
 def _open_bounded_zip(path: Path) -> zipfile.ZipFile:
     archive = zipfile.ZipFile(path)
     total_uncompressed = sum(info.file_size for info in archive.infolist())
-    if len(archive.infolist()) > 5000 or total_uncompressed > 60 * 1024 * 1024:
+    if len(archive.infolist()) > 5000 or total_uncompressed > MAX_ZIP_UNCOMPRESSED_BYTES:
         archive.close()
         raise BuzzSecurityError("Refusing Office archive that exceeds 5,000 entries or 60 MB uncompressed (zip-bomb guard).")
     return archive
 
 
+def _read_bounded_zip_member(
+    archive: zipfile.ZipFile,
+    member_name: str,
+    budget: dict[str, int],
+    max_member_bytes: int = MAX_XML_BYTES,
+) -> bytes:
+    with archive.open(member_name, "r") as handle:
+        raw = handle.read(max_member_bytes + 1)
+    if len(raw) > max_member_bytes:
+        raise BuzzSecurityError(
+            f"Refusing ZIP member {member_name!r} exceeding {max_member_bytes} decompressed bytes (zip-bomb guard)."
+        )
+    budget["total"] = budget.get("total", 0) + len(raw)
+    if budget["total"] > MAX_ZIP_UNCOMPRESSED_BYTES:
+        raise BuzzSecurityError(
+            f"Refusing Office archive exceeding {MAX_ZIP_UNCOMPRESSED_BYTES} cumulative decompressed bytes (zip-bomb guard)."
+        )
+    return raw
+
+
 def _extract_docx_text(path: Path) -> str:
+    budget: dict[str, int] = {"total": 0}
     with _open_bounded_zip(path) as archive:
         try:
-            root = _safe_parse_xml_bytes(archive.read("word/document.xml"))
+            raw_doc = _read_bounded_zip_member(archive, "word/document.xml", budget)
+            root = _safe_parse_xml_bytes(raw_doc)
         except KeyError as exc:
             raise BuzzOperationError("DOCX archive contains no word/document.xml body.") from exc
     paragraphs: list[str] = []
@@ -1226,16 +1412,19 @@ def _extract_docx_text(path: Path) -> str:
 
 
 def _extract_xlsx_rows(path: Path, max_rows: int = 2000, max_cols: int = 100) -> list[list[str]]:
+    budget: dict[str, int] = {"total": 0}
     with _open_bounded_zip(path) as archive:
         shared: list[str] = []
         if "xl/sharedStrings.xml" in archive.namelist():
-            s_root = _safe_parse_xml_bytes(archive.read("xl/sharedStrings.xml"))
+            raw_shared = _read_bounded_zip_member(archive, "xl/sharedStrings.xml", budget)
+            s_root = _safe_parse_xml_bytes(raw_shared)
             for item in s_root:
                 shared.append("".join(node.text or "" for node in item.iter() if node.tag.endswith("}t")))
         sheets = sorted(name for name in archive.namelist() if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name))[:5]
         rows: list[list[str]] = []
         for sheet in sheets:
-            w_root = _safe_parse_xml_bytes(archive.read(sheet))
+            raw_sheet = _read_bounded_zip_member(archive, sheet, budget)
+            w_root = _safe_parse_xml_bytes(raw_sheet)
             for row in (node for node in w_root.iter() if node.tag.endswith("}row")):
                 values: list[str] = []
                 for cell in (node for node in row if node.tag.endswith("}c")):
@@ -1289,14 +1478,8 @@ def inspect_media_attachment(
     allow_private_network: bool = False,
 ) -> dict[str, Any]:
     """Verify a content-addressed Buzz attachment across 5 zero-trust gates and optionally extract bounded text/data."""
-    try:
-        canonical_channel = str(uuid.UUID(str(channel_id).strip()))
-    except (ValueError, AttributeError) as exc:
-        raise BuzzValidationError("channel_id must be a canonical UUID.") from exc
-
-    canonical_event = str(event_id or "").strip().lower()
-    if not re.fullmatch(r"[0-9a-f]{64}", canonical_event):
-        raise BuzzValidationError("event_id must be 64 hexadecimal characters.")
+    canonical_channel = validate_channel_uuid(channel_id)
+    canonical_event = validate_event_hex64(event_id)
 
     mime_norm = str(mime_type or "").strip().lower()
     if mime_norm not in ALLOWED_MEDIA_MIMES:
@@ -1313,7 +1496,7 @@ def inspect_media_attachment(
     url_check = validate_media_url(base_url, media_url, expected_sha256)
     sha_norm = url_check["sha256"]
 
-    # Gate 3: Verify imeta tag binding on the referenced event if present in recent history
+    # Gate 3: Fail-closed verification of signed NIP-92 imeta tag binding on the referenced event
     msg_res = run_buzz_cli(
         ["messages", "get", "--channel", canonical_channel, "--limit", "200", "--format", "json"],
         relay_url=base_url,
@@ -1322,28 +1505,42 @@ def inspect_media_attachment(
         federated_adapter=creds["federated_adapter"],
         buzz_bin=buzz_bin,
     )
-    imeta_bound = False
-    if msg_res["ok"] and isinstance(msg_res["json"], list):
-        target_ev = next(
-            (item for item in msg_res["json"] if isinstance(item, dict) and str(item.get("id", "")).lower() == canonical_event),
-            None,
+    if not msg_res["ok"]:
+        raise BuzzSecurityError(
+            f"Refusing attachment: failed to query channel messages for NIP-92 imeta verification ({msg_res['stderr'] or msg_res['stdout']})."
         )
-        if target_ev is not None:
-            tags = target_ev.get("tags") if isinstance(target_ev.get("tags"), list) else []
-            for tag in tags:
-                if isinstance(tag, list) and len(tag) >= 2 and tag[0] == "imeta":
-                    fields = _parse_imeta_tag(tag[1:])
-                    if (
-                        fields.get("url") == url_check["normalized_url"]
-                        and fields.get("x", "").lower() == sha_norm
-                        and fields.get("m", "").lower() == mime_norm
-                    ):
-                        imeta_bound = True
-                        break
-            if not imeta_bound:
-                raise BuzzSecurityError(
-                    "Refusing attachment: the referenced Buzz event does not contain a matching imeta tag."
-                )
+    raw_msg_payload = msg_res["json"]
+    if isinstance(raw_msg_payload, dict) and isinstance(raw_msg_payload.get("messages"), list):
+        msg_events = raw_msg_payload["messages"]
+    elif isinstance(raw_msg_payload, list):
+        msg_events = raw_msg_payload
+    else:
+        raise BuzzSecurityError("Refusing attachment: unexpected channel message payload shape during imeta verification.")
+
+    target_ev = next(
+        (item for item in msg_events if isinstance(item, dict) and str(item.get("id", "")).lower() == canonical_event),
+        None,
+    )
+    if target_ev is None:
+        raise BuzzSecurityError(
+            f"Refusing attachment: referenced Buzz event {canonical_event} was not found in channel {canonical_channel}."
+        )
+    imeta_bound = False
+    tags = target_ev.get("tags") if isinstance(target_ev.get("tags"), list) else []
+    for tag in tags:
+        if isinstance(tag, list) and len(tag) >= 2 and tag[0] == "imeta":
+            fields = _parse_imeta_tag(tag[1:])
+            if (
+                fields.get("url") == url_check["normalized_url"]
+                and fields.get("x", "").lower() == sha_norm
+                and fields.get("m", "").lower() == mime_norm
+            ):
+                imeta_bound = True
+                break
+    if not imeta_bound:
+        raise BuzzSecurityError(
+            "Refusing attachment: the referenced Buzz event does not contain a matching imeta tag."
+        )
 
     with tempfile.TemporaryDirectory(prefix="legends-buzz-media-") as tmp_dir:
         out_path = Path(tmp_dir) / "attachment.bin"
@@ -1416,8 +1613,7 @@ def channel_snapshot(
     allow_private_network: bool = False,
 ) -> dict[str, Any]:
     """Capture a bounded operational snapshot of a channel's metadata, members, canvas, and recent messages."""
-    if not channel_id or not str(channel_id).strip():
-        raise BuzzValidationError("channel_id is required.")
+    canonical_channel = validate_channel_uuid(channel_id)
     if limit < 1 or limit > 100:
         raise BuzzValidationError("limit must be between 1 and 100.")
 
@@ -1432,7 +1628,7 @@ def channel_snapshot(
     inv = cli_inventory(buzz_bin=buzz_bin)
 
     meta_res = run_buzz_cli(
-        ["channels", "get", "--channel", channel_id, "--format", "json"],
+        ["channels", "get", "--channel", canonical_channel, "--format", "json"],
         relay_url=base_url,
         private_key=creds["private_key"],
         federated_token=creds["federated_token"],
@@ -1440,7 +1636,7 @@ def channel_snapshot(
         buzz_bin=buzz_bin,
     )
     members_res = run_buzz_cli(
-        ["channels", "members", "--channel", channel_id, "--format", "json"],
+        ["channels", "members", "--channel", canonical_channel, "--format", "json"],
         relay_url=base_url,
         private_key=creds["private_key"],
         federated_token=creds["federated_token"],
@@ -1448,7 +1644,7 @@ def channel_snapshot(
         buzz_bin=buzz_bin,
     )
     canvas_res = run_buzz_cli(
-        ["canvas", "get", "--channel", channel_id, "--format", "json"],
+        ["canvas", "get", "--channel", canonical_channel, "--format", "json"],
         relay_url=base_url,
         private_key=creds["private_key"],
         federated_token=creds["federated_token"],
@@ -1456,7 +1652,7 @@ def channel_snapshot(
         buzz_bin=buzz_bin,
     )
     messages_res = run_buzz_cli(
-        ["messages", "get", "--channel", channel_id, "--limit", str(limit), "--format", "json"],
+        ["messages", "get", "--channel", canonical_channel, "--limit", str(limit), "--format", "json"],
         relay_url=base_url,
         private_key=creds["private_key"],
         federated_token=creds["federated_token"],
@@ -1479,7 +1675,7 @@ def channel_snapshot(
         "schema": "legends-buzz.channel-snapshot/v1",
         "ok": ok,
         "relay_url": base_url,
-        "channel_id": channel_id,
+        "channel_id": canonical_channel,
         "message_format_used": "json",
         "supports_format_agent": bool(inv.get("supports_format_agent")),
         "metadata": meta_res["json"] if meta_res["ok"] else {"error": meta_res["stderr"] or meta_res["stdout"]},
@@ -1499,8 +1695,7 @@ def message_canary(
     allow_private_network: bool = False,
 ) -> dict[str, Any]:
     """Preview-first SHA-256 plan-gated disposable message canary (send -> readback -> react -> unreact -> delete)."""
-    if not channel_id or not str(channel_id).strip():
-        raise BuzzValidationError("channel_id is required.")
+    canonical_channel = validate_channel_uuid(channel_id)
 
     creds = resolve_credentials(env_file=env_file, relay_url=relay_url)
     if not creds["relay_url"]:
@@ -1513,7 +1708,7 @@ def message_canary(
     plan_payload = {
         "operation": "message-canary",
         "relay_url": base_url,
-        "channel_id": channel_id.strip(),
+        "channel_id": canonical_channel,
         "key_fingerprint": creds["key_classification"]["fingerprint"],
         "steps": [
             "messages send --channel <channel> --content <disposable-canary-text> --format json",
@@ -1543,11 +1738,11 @@ def message_canary(
             f"Refusing live canary mutation: --confirm-plan does not match preview plan_sha256 ({plan_sha256})."
         )
 
-    canary_nonce = hashlib.sha256(f"{time.time_ns()}:{channel_id}".encode("utf-8")).hexdigest()[:10]
+    canary_nonce = hashlib.sha256(f"{time.time_ns()}:{canonical_channel}".encode("utf-8")).hexdigest()[:10]
     canary_text = f"[legends-buzz canary {canary_nonce}] disposable verification probe"
 
     send_res = run_buzz_cli(
-        ["messages", "send", "--channel", channel_id, "--content", canary_text, "--format", "json"],
+        ["messages", "send", "--channel", canonical_channel, "--content", canary_text, "--format", "json"],
         relay_url=base_url,
         private_key=creds["private_key"],
         federated_token=creds["federated_token"],
@@ -1558,9 +1753,10 @@ def message_canary(
         raise BuzzOperationError(f"Canary send failed: {send_res['stderr'] or send_res['stdout']}")
 
     sent_obj = send_res["json"]
-    event_id = str(sent_obj.get("id") or sent_obj.get("event_id") or "").strip()
-    if not event_id:
+    raw_event_id = str(sent_obj.get("id") or sent_obj.get("event_id") or "").strip()
+    if not raw_event_id:
         raise BuzzOperationError("Canary send succeeded but returned no event id.")
+    event_id = validate_event_hex64(raw_event_id)
 
     readback_ok = False
     react_add_ok = False
@@ -1568,14 +1764,14 @@ def message_canary(
     delete_ok = False
     try:
         get_res = run_buzz_cli(
-            ["messages", "get", "--channel", channel_id, "--limit", "5", "--format", "json"],
+            ["messages", "get", "--channel", canonical_channel, "--limit", "5", "--format", "json"],
             relay_url=base_url,
             private_key=creds["private_key"],
             federated_token=creds["federated_token"],
             federated_adapter=creds["federated_adapter"],
             buzz_bin=buzz_bin,
         )
-        readback_ok = get_res["ok"] and (event_id in get_res["stdout"])
+        readback_ok = get_res["ok"] and (event_id in get_res["stdout"].lower())
 
         react_res = run_buzz_cli(
             ["reactions", "add", "--event", event_id, "--emoji", "👍", "--format", "json"],
@@ -1615,7 +1811,7 @@ def message_canary(
         "ok": all_ok,
         "plan_sha256": plan_sha256,
         "relay_url": base_url,
-        "channel_id": channel_id,
+        "channel_id": canonical_channel,
         "canary_event_id": event_id,
         "steps": {
             "send": True,
