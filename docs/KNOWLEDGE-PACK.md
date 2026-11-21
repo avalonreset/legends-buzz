@@ -8,7 +8,7 @@
 - Schema: `legends.knowledge-pack/v1`
 - Id: `buzz`
 - Module: `legends-buzz`
-- Version: `0.1.0`
+- Version: tracked in `knowledge/buzz/pack.json`
 - Entrypoint: `index.md`
 - Suggested home: `wiki/library/legends-buzz/buzz`
 - Ontology kind: `library`

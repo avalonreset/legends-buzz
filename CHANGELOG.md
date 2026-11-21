@@ -2,6 +2,11 @@
 
 All notable changes to `legends-buzz` are documented in this file.
 
+## [0.1.2] - 2026-11-21
+
+### Changed
+- **Evergreen README & Outlined Legends Font Design System (`r1`)**: Added `scripts/render_cards.py` generating seven outlined Legends Font SVG architecture, plain-english routing, and comparison cards under `assets/cards/r1/`, reorganized `README.md` with collapsible `<details>` reference drawers and zero hardcoded version or module-count strings, and added `.svg` asset mirroring to `setup.py` and `MANIFEST.in`.
+
 ## [0.1.1] - 2026-11-11
 
 ### Security & Hardening

@@ -1,7 +1,7 @@
 """legends-buzz: Self-hosted Block Buzz relay operations, 26-domain MCP-to-CLI routing, and desktop/relay verification."""
 from __future__ import annotations
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 from .api import (
     BuzzOperationError,
