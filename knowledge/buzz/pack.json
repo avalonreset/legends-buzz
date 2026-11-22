@@ -2,7 +2,7 @@
   "schema": "legends.knowledge-pack/v1",
   "id": "buzz",
   "module": "legends-buzz",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "entrypoint": "index.md",
   "files": [
     {

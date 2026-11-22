@@ -2,6 +2,10 @@
 
 All notable changes to `legends-buzz` are documented in this file.
 
+## [0.1.3] - 2026-11-22
+
+- Sync vendored `cto-legends` router skill pin (`69ddc4f68faa`), enforce LF line endings via `.gitattributes`, and standardize release artifact checksums.
+
 ## [0.1.2] - 2026-11-21
 
 ### Changed
