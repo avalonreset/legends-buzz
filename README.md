@@ -110,7 +110,7 @@ legends-buzz blueprint --name docker-compose-traefik --output docker-compose.yml
 <details>
 <summary><strong>Knowledge vault, relay runbooks, and <code>legends-empire</code> integration</strong></summary>
 
-Start at [wiki/index.md](wiki/index.md) or attach the versioned knowledge pack at [knowledge/buzz/pack.json](knowledge/buzz/pack.json) (`legends.knowledge-pack/v1`). Open this repository folder in Obsidian or read it as plain Markdown.
+Start at [wiki/index.md](wiki/index.md) or attach the versioned knowledge pack at [knowledge/buzz/pack.json](knowledge/buzz/pack.json) (`legends.knowledge-pack/v1`). Attach into a [`legends-empire`](https://github.com/avalonreset/legends-empire) vault or read it directly as plain Markdown.
 
 - **Operational runbooks:** [Block Buzz Knowledge Vault Index](wiki/index.md), [Knowledge Pack & Empire Attachment Guide](docs/KNOWLEDGE-PACK.md), [Release & Verification Procedure](docs/RELEASE.md), and [Primary Sources & Citations](references/sources.md).
 - **Private operating templates:** Use [templates/private-operation-receipt.md](templates/private-operation-receipt.md), [templates/relay-upgrade-receipt.md](templates/relay-upgrade-receipt.md), and [templates/canary-verification-receipt.md](templates/canary-verification-receipt.md) to keep private relay inventories, migration rehearsals, and canary receipts in your own vault outside public repositories.
