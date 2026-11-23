@@ -38,10 +38,10 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/avalonreset/legends-buzz"
+Homepage = "https://cto-legends.com/modules/legends-buzz"
+Documentation = "https://cto-legends.com/modules/legends-buzz"
 Repository = "https://github.com/avalonreset/legends-buzz"
 Issues = "https://github.com/avalonreset/legends-buzz/issues"
-Documentation = "https://github.com/avalonreset/legends-buzz/blob/main/docs/AGENT-RECIPE.md"
 Changelog = "https://github.com/avalonreset/legends-buzz/blob/main/CHANGELOG.md"
 
 [project.scripts]
